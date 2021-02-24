@@ -44,7 +44,6 @@
 using namespace ::chip;
 using namespace ::chip::Inet;
 using namespace ::chip::System;
-using namespace ::chip::TLV;
 
 namespace chip {
 namespace DeviceLayer {
@@ -53,12 +52,6 @@ ConnectivityManagerImpl ConnectivityManagerImpl::sInstance;
 
 ConnectivityManager::WiFiStationMode ConnectivityManagerImpl::_GetWiFiStationMode(void)
 {
-    if (mWiFiStationMode != kWiFiStationMode_ApplicationControlled)
-    {
-
-        mWiFiStationMode = kWiFiStationMode_Enabled;
-        //  : kWiFiStationMode_Disabled;
-    }
     return mWiFiStationMode;
 }
 
@@ -67,11 +60,14 @@ bool ConnectivityManagerImpl::_IsWiFiStationEnabled(void)
     return GetWiFiStationMode() == kWiFiStationMode_Enabled;
 }
 
+bool ConnectivityManagerImpl::_IsWiFiStationApplicationControlled(void)
+{
+    return mWiFiStationMode == kWiFiStationMode_ApplicationControlled;
+}
+
 CHIP_ERROR ConnectivityManagerImpl::_SetWiFiStationMode(WiFiStationMode val)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
-
-    VerifyOrExit(val != kWiFiStationMode_NotSupported, err = CHIP_ERROR_INVALID_ARGUMENT);
 
     if (mWiFiStationMode != val)
     {
@@ -81,7 +77,6 @@ CHIP_ERROR ConnectivityManagerImpl::_SetWiFiStationMode(WiFiStationMode val)
 
     mWiFiStationMode = val;
 
-exit:
     return err;
 }
 bool ConnectivityManagerImpl::_IsWiFiStationConnected(void)
@@ -90,15 +85,13 @@ bool ConnectivityManagerImpl::_IsWiFiStationConnected(void)
 }
 bool ConnectivityManagerImpl::_IsWiFiStationProvisioned(void)
 {
-    return false;
+    return mIsProvisioned;
 }
-
-void ConnectivityManagerImpl::_ClearWiFiStationProvision(void) {}
 
 CHIP_ERROR ConnectivityManagerImpl::_SetWiFiAPMode(WiFiAPMode val)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
-
+    mWiFiAPMode    = val;
     return err;
 }
 
@@ -276,9 +269,20 @@ static uint16_t MapFrequency(const uint16_t inBand, const uint8_t inChannel)
     return frequency;
 }
 
-CHIP_ERROR ConnectivityManagerImpl::GetWifiParams(void)
+CHIP_ERROR ConnectivityManagerImpl::GetWifiStatus(void)
 {
-
+    _interface  = WiFiInterface::get_default_instance();
+    auto status = _interface->get_connection_status();
+    ChipLogDetail(DeviceLayer, "Connection status: %s", status2str(status));
+    printf("MAC: %s\n", _interface->get_mac_address());
+    SocketAddress a;
+    _interface->get_ip_address(&a);
+    printf("IP: %s\n", a.get_ip_address());
+    _interface->get_netmask(&a);
+    printf("Netmask: %s\n", a.get_ip_address());
+    _interface->get_gateway(&a);
+    printf("Gateway: %s\n", a.get_ip_address());
+    printf("RSSI: %d\n\n", _interface->get_rssi());
     return CHIP_NO_ERROR;
 }
 
@@ -288,60 +292,105 @@ CHIP_ERROR ConnectivityManagerImpl::_Init()
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
-    mWiFiStationMode  = kWiFiStationMode_Disabled;
-    mWiFiStationState = kWiFiStationState_NotConnected;
-
+    mWiFiStationMode                = kWiFiStationMode_Disabled;
+    mWiFiStationState               = kWiFiStationState_NotConnected;
+    mIsProvisioned                  = false;
+    mWiFiAPMode                     = kWiFiAPMode_NotSupported;
     mWiFiStationReconnectIntervalMS = CHIP_DEVICE_CONFIG_WIFI_STATION_RECONNECT_INTERVAL;
     mWiFiAPIdleTimeoutMS            = CHIP_DEVICE_CONFIG_WIFI_AP_IDLE_TIMEOUT;
 
     // TODO Initialize the Chip Addressing and Routing Module.
-    // interface->set_sefault_parameters();
 
     return err;
 }
 
 void ConnectivityManagerImpl::_OnPlatformEvent(const ChipDeviceEvent * event) {}
 
-CHIP_ERROR ConnectivityManagerImpl::WiFiConnect()
-{
-    return CHIP_NO_ERROR;
-}
-
-CHIP_ERROR ConnectivityManagerImpl::WiFiDisconnect()
-{
-    return CHIP_NO_ERROR;
-}
-
 CHIP_ERROR ConnectivityManagerImpl::ProvisionWiFiNetwork(const char * ssid, const char * key)
 {
-    WiFiInterface * interface = WiFiInterface::get_default_instance();
-    // ChipLogDetail(DeviceLayer, "wifi interface: %p", interface);
-    // ChipLogDetail(DeviceLayer, "wifi interface: set the default parameters");
-    // interface->set_default_parameters();
-    // auto conn_status = interface->get_connection_status();
-    // ChipLogDetail(DeviceLayer, "interface connection status: %d", interface);
-    // interface->attach(
-    //     [](nsapi_event_t event, intptr_t data) { ChipLogDetail(DeviceLayer, "WiFi event: event = %d, data = %p", event, data);
-    //     });
+    _interface = WiFiInterface::get_default_instance();
 
     ChipLogDetail(DeviceLayer, "connect to %s with %s password", ssid, key);
-    interface->attach(
+    _interface->attach(
         [](nsapi_event_t event, intptr_t data) { ChipLogDetail(DeviceLayer, "WiFi event: event = %d, data = %p", event, data); });
 
-    auto result = interface->connect(ssid, key, NSAPI_SECURITY_WPA_WPA2);
+    auto result = _interface->connect(ssid, key, NSAPI_SECURITY_WPA_WPA2);
     ChipLogDetail(DeviceLayer, "Connection result: %d", result);
-    auto status = interface->get_connection_status();
-    ChipLogDetail(DeviceLayer, "Connection status: %d", status);
+    auto status = _interface->get_connection_status();
+    ChipLogDetail(DeviceLayer, "Connection status: %s", status2str(status));
+    mWiFiStationMode = kWiFiStationMode_Enabled;
+    if (status == NSAPI_STATUS_GLOBAL_UP)
+    {
+        mWiFiStationState = kWiFiStationState_Connected;
+        mIsProvisioned    = true;
+    }
+    else
+    {
+        mWiFiStationState = kWiFiStationState_NotConnected;
+    }
 
     return CHIP_NO_ERROR;
 }
-CHIP_ERROR ConnectivityManagerImpl::ScanWiFi()
+
+void ConnectivityManagerImpl::_ClearWiFiStationProvision(void)
 {
-    return CHIP_NO_ERROR;
+    _interface = WiFiInterface::get_default_instance();
+    _interface->set_credentials(NULL, NULL, NSAPI_SECURITY_NONE);
+    mWiFiStationMode  = kWiFiStationMode_Disabled;
+    mWiFiStationState = kWiFiStationState_NotConnected;
+    mIsProvisioned    = false;
 }
-CHIP_ERROR ConnectivityManagerImpl::WiFiScanResults()
+int ConnectivityManagerImpl::ScanWiFi(int APlimit, NetworkInfo * wifiInfo)
 {
-    return CHIP_NO_ERROR;
+
+    _interface = WiFiInterface::get_default_instance();
+    if (!_interface)
+    {
+        printf("ERROR: No WiFiInterface found.\n");
+        return -1;
+    }
+    auto status = _interface->get_connection_status();
+    if (status != NSAPI_STATUS_GLOBAL_UP)
+    {
+        printf(" Currently device not connected to any WIFI  AP\n");
+    }
+    WiFiAccessPoint * ap;
+
+    int count = _interface->scan(NULL, 0);
+
+    if (count <= 0)
+    {
+        printf("scan() failed with return value: %d\n", count);
+        return 0;
+    }
+
+    count = count < APlimit ? count : APlimit;
+
+    ap    = new WiFiAccessPoint[count];
+    count = _interface->scan(ap, count);
+
+    if (count <= 0)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < count; i++)
+    {
+        sprintf(wifiInfo[i].WiFiSSID, "%s", ap[i].get_ssid());
+        wifiInfo[i].security = NsapiToNetworkSecurity(ap[i].get_security());
+        wifiInfo[i].BSSID[0] = ap[i].get_bssid()[0];
+        wifiInfo[i].BSSID[1] = ap[i].get_bssid()[1];
+        wifiInfo[i].BSSID[2] = ap[i].get_bssid()[2];
+        wifiInfo[i].BSSID[3] = ap[i].get_bssid()[3];
+        wifiInfo[i].BSSID[4] = ap[i].get_bssid()[4];
+        wifiInfo[i].BSSID[5] = ap[i].get_bssid()[5];
+        wifiInfo[i].RSSI     = ap[i].get_rssi();
+        wifiInfo[i].channel  = ap[i].get_channel();
+    }
+
+    delete[] ap;
+
+    return count;
 }
 
 CHIP_ERROR ConnectivityManagerImpl::OnStationConnected()
@@ -355,6 +404,7 @@ CHIP_ERROR ConnectivityManagerImpl::OnStationConnected()
     event.Type                          = DeviceEventType::kWiFiConnectivityChange;
     event.WiFiConnectivityChange.Result = kConnectivity_Established;
     PlatformMgr().PostEvent(&event);
+    mWiFiStationState = kWiFiStationState_Connected;
 }
 
 CHIP_ERROR ConnectivityManagerImpl::OnStationDisconnected()
@@ -366,6 +416,57 @@ CHIP_ERROR ConnectivityManagerImpl::OnStationDisconnected()
     event.Type                          = DeviceEventType::kWiFiConnectivityChange;
     event.WiFiConnectivityChange.Result = kConnectivity_Lost;
     PlatformMgr().PostEvent(&event);
+    mWiFiStationState = kWiFiStationState_NotConnected;
+}
+
+const char * ConnectivityManagerImpl::status2str(nsapi_connection_status_t status)
+{
+    switch (status)
+    {
+    case NSAPI_STATUS_LOCAL_UP:
+        return "Network local UP";
+    case NSAPI_STATUS_GLOBAL_UP:
+        return "Network global UP";
+    case NSAPI_STATUS_DISCONNECTED:
+        return "Network disconnected";
+    case NSAPI_STATUS_CONNECTING:
+        return "Network connecting";
+    default:
+        return "Unknown";
+    }
+}
+
+WiFiAuthSecurityType ConnectivityManagerImpl::NsapiToNetworkSecurity(nsapi_security_t nsapi_security)
+{
+    switch (nsapi_security)
+    {
+    case NSAPI_SECURITY_NONE:
+        return kWiFiSecurityType_None;
+    case NSAPI_SECURITY_WEP:
+        return kWiFiSecurityType_WEP;
+    case NSAPI_SECURITY_WPA:
+        return kWiFiSecurityType_WPAPersonal;
+    case NSAPI_SECURITY_WPA2:
+        return kWiFiSecurityType_WPA2Personal;
+    case NSAPI_SECURITY_WPA_WPA2:
+        return kWiFiSecurityType_WPAEnterprise;
+    case NSAPI_SECURITY_PAP:
+        return kWiFiSecurityType_NotSpecified;
+    case NSAPI_SECURITY_CHAP:
+        return kWiFiSecurityType_NotSpecified;
+    case NSAPI_SECURITY_EAP_TLS:
+        return kWiFiSecurityType_NotSpecified;
+    case NSAPI_SECURITY_PEAP:
+        return kWiFiSecurityType_NotSpecified;
+    case NSAPI_SECURITY_WPA2_ENT:
+        return kWiFiSecurityType_WPA2Enterprise;
+    case NSAPI_SECURITY_WPA3:
+        return kWiFiSecurityType_WPA3Personal;
+    case NSAPI_SECURITY_WPA3_WPA2:
+        return kWiFiSecurityType_WPA3Enterprise;
+    default:
+        return kWiFiSecurityType_NotSpecified;
+    }
 }
 
 } // namespace DeviceLayer

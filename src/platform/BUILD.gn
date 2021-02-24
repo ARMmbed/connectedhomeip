@@ -541,7 +541,8 @@ if (chip_device_platform != "none" && chip_device_platform != "external") {
         "mbed/ConnectivityManagerImpl.h",
         "mbed/DeviceNetworkProvisioningDelegateImpl.cpp",
         "mbed/DeviceNetworkProvisioningDelegateImpl.h",
-        "mbed/MbedConfig.cpp"
+        "mbed/MbedConfig.cpp",
+        "mbed/NetworkInfo.h"
       ]
     }
 
